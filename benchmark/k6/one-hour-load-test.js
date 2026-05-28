@@ -1,5 +1,4 @@
 import { check, sleep } from 'k6';
-import http from 'k6/http';
 import { Trend, Rate, Gauge } from 'k6/metrics';
 import {
   setupTestEntities,
@@ -56,28 +55,48 @@ export default function (data) {
     const scenario = Math.random();
 
     if (scenario < 0.25) {
-      const transferRes = http.post(`${BASE_URL}/v1/payments/wallet-transfer`, JSON.stringify({
+      const mutation = `
+        mutation($walletId: String!, $merchantId: String!, $amount: Float!) {
+          walletTransfer(walletId: $walletId, merchantId: $merchantId, amount: $amount) {
+            id
+            status
+            amount
+          }
+        }
+      `;
+      const res = executeGraphQL(mutation, {
         walletId: walletId,
         merchantId: merchantId,
         amount: Math.round(Math.random() * 100 * 100) / 100 + 0.01,
-      }), { headers: { 'Content-Type': 'application/json' } });
+      });
 
-      walletTransferLatency.add(transferRes.timings.duration);
-      check(transferRes, {
-        'transfer 2xx': (r) => r.status >= 200 && r.status < 300,
+      walletTransferLatency.add(res.timings.duration);
+      check(res, {
+        'wallet transfer graphql ok': (r) => r.status === 200,
       }) || errors.add(1);
 
     } else if (scenario < 0.40) {
-      const paymentRes = http.post(`${BASE_URL}/v1/payments`, JSON.stringify({
-        userId: userId,
-        merchantId: merchantId,
-        amount: Math.round(Math.random() * 500 * 100) / 100 + 0.01,
-        type: 'DEBIT',
-      }), { headers: { 'Content-Type': 'application/json' } });
+      const mutation = `
+        mutation($input: ProcessPaymentInput!) {
+          processPayment(input: $input) {
+            id
+            status
+            amount
+          }
+        }
+      `;
+      const res = executeGraphQL(mutation, {
+        input: {
+          userId: userId,
+          merchantId: merchantId,
+          amount: Math.round(Math.random() * 500 * 100) / 100 + 0.01,
+          type: 'DEBIT',
+        },
+      });
 
-      paymentCreateLatency.add(paymentRes.timings.duration);
-      check(paymentRes, {
-        'payment 2xx': (r) => r.status >= 200 && r.status < 300,
+      paymentCreateLatency.add(res.timings.duration);
+      check(res, {
+        'payment create graphql ok': (r) => r.status === 200,
       }) || errors.add(1);
 
     } else if (scenario < 0.55) {
@@ -96,29 +115,60 @@ export default function (data) {
       check(res, { 'graphql 2xx': (r) => r.status === 200 }) || errors.add(1);
 
     } else if (scenario < 0.65) {
-      const topUpRes = http.post(`${BASE_URL}/v1/payments/wallets/${walletId}/topup`, JSON.stringify({
+      const mutation = `
+        mutation($walletId: String!, $amount: Float!) {
+          topUpWallet(walletId: $walletId, amount: $amount) {
+            id
+            balance
+          }
+        }
+      `;
+      const res = executeGraphQL(mutation, {
+        walletId: walletId,
         amount: Math.round(Math.random() * 1000 * 100) / 100 + 1,
-      }), { headers: { 'Content-Type': 'application/json' } });
+      });
 
-      topUpLatency.add(topUpRes.timings.duration);
-      check(topUpRes, {
-        'topup 2xx': (r) => r.status >= 200 && r.status < 300,
+      topUpLatency.add(res.timings.duration);
+      check(res, {
+        'topup graphql ok': (r) => r.status === 200 && r.json().data.topUpWallet != null,
       }) || errors.add(1);
 
     } else if (scenario < 0.75) {
-      const searchRes = http.get(`${BASE_URL}/v1/payments/search?status=SUCCESS&page=0&size=10`);
+      const query = `
+        query($minAmount: Float, $maxAmount: Float, $status: String, $page: Int, $size: Int) {
+          searchPayments(minAmount: $minAmount, maxAmount: $maxAmount, status: $status, page: $page, size: $size) {
+            id
+            amount
+            status
+            createdAt
+          }
+        }
+      `;
+      const res = executeGraphQL(query, {
+        minAmount: 1,
+        maxAmount: 500,
+        status: 'SUCCESS',
+        page: 0,
+        size: 10,
+      });
 
-      searchLatency.add(searchRes.timings.duration);
-      check(searchRes, {
-        'search 2xx': (r) => r.status >= 200 && r.status < 300,
-      }) || errors.add(1);
+      searchLatency.add(res.timings.duration);
+      check(res, { 'search graphql ok': (r) => r.status === 200 }) || errors.add(1);
 
     } else if (scenario < 0.85) {
-      const getRes = http.get(`${BASE_URL}/v1/payments/user/${userId}`);
-      restGetLatency.add(getRes.timings.duration);
-      check(getRes, {
-        'get 2xx': (r) => r.status >= 200 && r.status < 300,
-      }) || errors.add(1);
+      const query = `
+        query($userId: String!, $limit: Int) {
+          payments(userId: $userId, limit: $limit) {
+            id
+            amount
+            status
+            createdAt
+          }
+        }
+      `;
+      const res = executeGraphQL(query, { userId: userId, limit: 10 });
+      restGetLatency.add(res.timings.duration);
+      check(res, { 'get payments graphql ok': (r) => r.status === 200 }) || errors.add(1);
 
     } else if (scenario < 0.95) {
       const mutation = `
@@ -141,11 +191,22 @@ export default function (data) {
       check(res, { 'graphql ok': (r) => r.status === 200 }) || errors.add(1);
 
     } else {
-      const summaryRes = http.get(
-        `${BASE_URL}/v1/payments/reports/summary?startDate=2020-01-01T00:00:00Z&endDate=2030-12-31T23:59:59Z`
-      );
-      check(summaryRes, {
-        'summary 2xx': (r) => r.status >= 200 && r.status < 300,
+      const query = `
+        query($startDate: String!, $endDate: String!) {
+          paymentSummary(startDate: $startDate, endDate: $endDate) {
+            totalsByStatus {
+              status
+              total
+            }
+          }
+        }
+      `;
+      const res = executeGraphQL(query, {
+        startDate: '2020-01-01T00:00:00Z',
+        endDate: '2030-12-31T23:59:59Z',
+      });
+      check(res, {
+        'summary graphql ok': (r) => r.status === 200,
       }) || errors.add(1);
     }
   } catch (e) {

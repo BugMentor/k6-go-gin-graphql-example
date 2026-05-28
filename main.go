@@ -19,7 +19,6 @@ import (
 	"github.com/enterprise/payment-service/internal/application/usecase"
 	"github.com/enterprise/payment-service/internal/infrastructure/persistence"
 	"github.com/enterprise/payment-service/internal/presentation/graphql"
-	"github.com/enterprise/payment-service/internal/presentation/rest"
 	"github.com/enterprise/payment-service/internal/telemetry"
 )
 
@@ -83,8 +82,6 @@ func main() {
 	})
 
 	router.GET("/metrics", telemetry.PrometheusHandler())
-
-	rest.RegisterRoutes(router, repo)
 
 	graphql.RegisterRoutes(router, ucs, repo)
 

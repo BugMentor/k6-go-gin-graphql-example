@@ -9,7 +9,7 @@
   <img src="https://img.shields.io/badge/Grafana-LGTM-F46800?style=for-the-badge&logo=grafana&logoColor=white" alt="Grafana LGTM">
 </p>
 
-Go 1.25 + Gin 1.10 ACID-compliant payment platform with REST and GraphQL endpoints. Full LGTM observability (Loki, Grafana, Tempo, Mimir), Clean Architecture, TDD, and OpenTelemetry instrumentation. Auto-scales on Kubernetes via HPA.
+Go 1.25 + Gin 1.10 ACID-compliant payment platform with GraphQL endpoints. Full LGTM observability (Loki, Grafana, Tempo, Mimir), Clean Architecture, TDD, and OpenTelemetry instrumentation. Auto-scales on Kubernetes via HPA.
 
 ---
 
@@ -135,7 +135,6 @@ graph LR
 ```mermaid
 graph TD
     subgraph Presentation["PRESENTATION LAYER"]
-        REST["REST Handlers (/v1/)"]
         GQL["GraphQL API (/graphql)"]
     end
     subgraph Application["APPLICATION LAYER"]
@@ -159,7 +158,7 @@ graph TD
 - **Domain** — Zero framework annotations. Pure Go structs and business rules.
 - **Application** — Use cases orchestrate domain logic. Depends ONLY on domain.
 - **Infrastructure** — pgx PostgreSQL repository, connection pool (max 50), external adapters.
-- **Presentation** — REST handlers and GraphQL API endpoints.
+- **Presentation** — GraphQL API endpoints.
 
 ---
 
@@ -227,23 +226,6 @@ k6 run -e BASE_URL=http://localhost:8080 benchmark/k6/payment-service-load-test.
 ---
 
 ## API Endpoints
-
-### REST (`/v1/`)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST/GET/DELETE | `/users` | User CRUD |
-| POST/GET/DELETE | `/merchants` | Merchant CRUD |
-| POST/GET/DELETE | `/wallets` | Wallet CRUD |
-| POST | `/payments` | Create payment |
-| POST | `/payments/batch` | Batch create payments |
-| POST | `/payments/wallet-transfer` | Transfer between wallet and merchant |
-| POST | `/payments/wallets/{id}/topup` | Add funds to wallet |
-| PUT | `/payments/{id}/refund` | Refund a payment |
-| GET | `/payments/{id}` | Get payment by ID |
-| GET | `/payments/user/{userId}` | List user's payments |
-| GET | `/payments/search` | Search payments with filters |
-| GET | `/payments/reports/summary` | Aggregate payment summary |
 
 ### GraphQL (`/graphql`)
 
@@ -413,7 +395,6 @@ graph TD
 │   ├── infrastructure/
 │   │   └── persistence/       # pgx PostgreSQL repository + migrations
 │   ├── presentation/
-│   │   ├── rest/              # Gin REST handlers (18 endpoints)
 │   │   └── graphql/           # GraphQL schema, types, resolvers
 │   └── telemetry/             # OTel SDK init + Prometheus metrics
 ├── benchmark/
