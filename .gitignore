@@ -1,0 +1,50 @@
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.log
+*.csv
+
+# Go
+vendor/
+*.sum.bak
+payment-service
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.tar
+
+# Data
+.data/
+
+# Environment
+.env
+.env.local
+
+# Results
+benchmark/k6/results/*.json
+benchmark/k6/results/*.log
+benchmark/k6/results/*.csv
+
+# Grafana
+.grafana_data/
+
+# Tempo
+tempo_data/
+
+# Mimir
+mimir_data/
