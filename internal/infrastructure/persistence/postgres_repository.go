@@ -26,7 +26,7 @@ func (r *PostgresRepository) Save(ctx context.Context, payment *model.Payment) (
 	err := r.pool.QueryRow(ctx,
 		`INSERT INTO payments (id, user_id, merchant_id, wallet_id, amount, type, status, metadata, created_at, version)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		 ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, version = payments.version + 1
+		 ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, version = EXCLUDED.version + 1
 		 RETURNING id, user_id, merchant_id, wallet_id, amount, type, status, metadata, created_at, version`,
 		payment.ID, payment.UserID, payment.MerchantID, payment.WalletID, payment.Amount,
 		payment.Type, payment.Status, metadataJSON, payment.CreatedAt, payment.Version,
