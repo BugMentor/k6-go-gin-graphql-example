@@ -1,6 +1,6 @@
 import { check, sleep } from 'k6';
 import http from 'k6/http';
-import { uuidv4 } from 'https://jslib.io/k6-utils/1.4.0/index.js';
+import { uuidv4 } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
 const GRAPHQL_URL = `${BASE_URL}/graphql`;

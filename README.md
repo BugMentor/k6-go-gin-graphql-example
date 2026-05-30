@@ -321,7 +321,7 @@ Available at `http://localhost:3000` → **"Payment Service - Real-Time Monitori
 
 ## Kubernetes Deployment
 
-Deployed on **KinD (Kubernetes in Docker)** cluster `payment-fight` (3 nodes: 1 control-plane, 2 workers). Also supports **Floci** for local EKS simulation.
+Deployed on **KinD (Kubernetes in Docker)** cluster `payment-fight` (3 nodes: 1 control-plane, 2 workers) for local testing, plus **Floci** (EKS simulator) for production-grade EKS + NLB + HPA simulation.
 
 ### Cluster Topology
 
@@ -345,6 +345,52 @@ graph TD
         Prom --> MimirS
         OTelCol --> MimirS
     end
+```
+
+### Floci Architecture (EKS Simulation)
+
+Floci replaces KinD for EKS-native testing — it runs a K3s cluster inside LocalStack, mocks AWS EKS + ELBv2 APIs, and provides a real NLB endpoint for k6 attacks.
+
+```mermaid
+graph TD
+    subgraph Host["Docker Host"]
+        FL["Floci Container<br/>floci/floci:latest<br/>📦 AWS API (4566)<br/>☸️ K3s (6443)<br/>📊 Metrics Server"]
+        REG["Registry:2<br/>port 5000"]
+
+        subgraph EKS["EKS Cluster (K3s)"]
+            subgraph ns["namespace: payments"]
+                ELB["NLB<br/>port 80 → 8080"]
+                HPA["HPA<br/>min:2 max:30<br/>CPU>80% RAM>60%"]
+                PG["PostgreSQL 16"]
+                SVC1["Go Gin pod 1<br/>1Gi/1CPU"]
+                SVC2["Go Gin pod 2<br/>1Gi/1CPU"]
+                SVCX["… up to 30 pods"]
+            end
+        end
+
+        K6["k6 Load Test"] -->|hits localhost| ELB
+        ELB --> SVC1 & SVC2
+        SVC1 --> PG
+        SVC2 --> PG
+        HPA -.->|scales| SVC1 & SVC2 & SVCX
+        FL -->|aws eks mock| ELB
+        REG -.->|image pull| SVC1
+    end
+
+    subgraph Env["Go-Specific Env Vars"]
+        P1["PORT=8080"]
+        P2["DATABASE_URL=postgres://payment:payment@postgres:5432/payments"]
+        P3["GOMAXPROCS=2 | GOMEMLIMIT=200MiB"]
+    end
+    SVC1 --> Env
+```
+
+**Setup commands:**
+```bash
+docker compose -f benchmark/floci/docker-compose.yaml up -d
+bash benchmark/floci/setup-eks.sh                     # creates EKS + deploys
+kubectl -n payments port-forward svc/payment-service 8080:80
+BASE_URL=http://localhost:8080 k6 run benchmark/k6/memory-stress-test.js
 ```
 
 ### Deployment Manifests

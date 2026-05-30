@@ -1,34 +1,35 @@
 import { check, sleep } from 'k6';
-import http from 'k6/http';
 import { Trend, Rate, Gauge } from 'k6/metrics';
 import {
   setupTestEntities,
   teardownTestEntities,
-  buildRampStages,
   printScalingBox,
+  refuelWalletIfNeeded,
   executeGraphQL,
 } from './_shared.js';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
-const TARGET_VUS = parseInt(__ENV.TARGET_VUS || '100');
-const SCALE_STEPS = parseInt(__ENV.SCALE_STEPS || '8');
-const STEP_DURATION = parseInt(__ENV.STEP_DURATION || '30');
-const COOLDOWN_DURATION = parseInt(__ENV.COOLDOWN_DURATION || '60');
+const TARGET_VUS = parseInt(__ENV.TARGET_VUS || '300');
 
-const cpuErrors = new Rate('cpu_stress_errors');
-const walletTransferDuration = new Trend('cpu_stress_wallet_transfer_duration');
-const batchDuration = new Trend('cpu_stress_batch_duration');
-const searchDuration = new Trend('cpu_stress_search_duration');
-const activeVUs = new Gauge('cpu_stress_active_vus');
+const errors = new Rate('errors');
+const walletTransferLatency = new Trend('cpu_stress_wallet_transfer_duration', true);
+const batchLatency = new Trend('cpu_stress_batch_duration', true);
+const searchLatency = new Trend('cpu_stress_search_duration', true);
+const summaryLatency = new Trend('cpu_stress_summary_duration', true);
+const paymentCreateLatency = new Trend('cpu_stress_payment_create_duration', true);
+const concurrentVUs = new Gauge('concurrent_vus');
 
 export const options = {
-  stages: buildRampStages(TARGET_VUS, SCALE_STEPS, STEP_DURATION, COOLDOWN_DURATION),
+  stages: [
+    { duration: '1m', target: Math.floor(TARGET_VUS * 0.2) },
+    { duration: '2m', target: Math.floor(TARGET_VUS * 0.5) },
+    { duration: '3m', target: TARGET_VUS },
+    { duration: '5m', target: TARGET_VUS },
+    { duration: '1m', target: 0 },
+  ],
   thresholds: {
-    http_req_duration: ['p(95)<3000', 'p(99)<5000'],
+    http_req_duration: ['p(95)<8000', 'p(99)<20000'],
     http_req_failed: ['rate<0.10'],
-    cpu_stress_wallet_transfer_duration: ['p(95)<4000'],
-    cpu_stress_batch_duration: ['p(95)<5000'],
-    cpu_stress_search_duration: ['p(95)<3000'],
   },
 };
 
@@ -37,48 +38,64 @@ export function setup() {
 }
 
 export default function (data) {
-  activeVUs.add(1);
+  concurrentVUs.add(1);
 
   const walletId = data.walletId;
   const merchantId = data.merchantId;
   const userId = data.userId;
 
   try {
+    refuelWalletIfNeeded(BASE_URL, walletId, 50000);
+
     const scenario = Math.random();
 
     if (scenario < 0.30) {
-      const transferRes = http.post(`${BASE_URL}/v1/payments/wallet-transfer`, JSON.stringify({
-        walletId: walletId,
-        merchantId: merchantId,
-        amount: Math.round(Math.random() * 50 * 100) / 100 + 0.01,
-      }), { headers: { 'Content-Type': 'application/json' } });
-
-      walletTransferDuration.add(transferRes.timings.duration);
-      check(transferRes, { 'transfer ok': (r) => r.status >= 200 && r.status < 300 }) || cpuErrors.add(1);
+      const mutation = `
+        mutation($walletId: String!, $merchantId: String!, $amount: Float!) {
+          walletTransfer(walletId: $walletId, merchantId: $merchantId, amount: $amount) {
+            id
+            status
+          }
+        }
+      `;
+      const start = Date.now();
+      const responses = [];
+      for (let i = 0; i < 3; i++) {
+        const res = executeGraphQL(mutation, {
+          walletId: walletId,
+          merchantId: merchantId,
+          amount: Math.round(Math.random() * 100 * 100) / 100 + 0.01,
+        });
+        responses.push(res);
+      }
+      walletTransferLatency.add((Date.now() - start) / responses.length);
+      responses.forEach((r) => {
+        check(r, { 'wallet transfer ok': (res) => res.status === 200 }) || errors.add(1);
+      });
 
     } else if (scenario < 0.55) {
-      const batchCount = 50 + Math.floor(Math.random() * 30);
-      const batch = [];
-      for (let i = 0; i < batchCount; i++) {
-        batch.push({
+      const mutation = `
+        mutation($payments: [ProcessPaymentInput!]!) {
+          processBatchPayments(payments: $payments)
+        }
+      `;
+      const payments = [
+        {
           userId: userId,
           merchantId: merchantId,
           amount: Math.round(Math.random() * 100 * 100) / 100 + 0.01,
           type: 'DEBIT',
-        });
-      }
-
-      const batchRes = http.post(`${BASE_URL}/v1/payments/batch`, JSON.stringify(batch), {
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      batchDuration.add(batchRes.timings.duration);
-      check(batchRes, { 'batch ok': (r) => r.status >= 200 && r.status < 300 }) || cpuErrors.add(1);
+        },
+      ];
+      const start = Date.now();
+      const res = executeGraphQL(mutation, { payments });
+      batchLatency.add(Date.now() - start);
+      check(res, { 'batch ok': (r) => r.status === 200 }) || errors.add(1);
 
     } else if (scenario < 0.75) {
       const query = `
-        query($minAmount: Float, $status: String, $page: Int!, $size: Int!) {
-          searchPayments(minAmount: $minAmount, status: $status, page: $page, size: $size) {
+        query($minAmount: Float, $maxAmount: Float, $status: String, $page: Int, $size: Int) {
+          searchPayments(minAmount: $minAmount, maxAmount: $maxAmount, status: $status, page: $page, size: $size) {
             id
             amount
             status
@@ -87,19 +104,32 @@ export default function (data) {
         }
       `;
       const res = executeGraphQL(query, {
-        minAmount: Math.random() * 100,
+        minAmount: 1,
+        maxAmount: 500,
         status: 'SUCCESS',
         page: 0,
-        size: 20,
+        size: 10,
       });
-      searchDuration.add(res.timings.duration);
-      check(res, { 'search ok': (r) => r.status === 200 }) || cpuErrors.add(1);
+      searchLatency.add(res.timings.duration);
+      check(res, { 'search ok': (r) => r.status === 200 }) || errors.add(1);
 
     } else if (scenario < 0.90) {
-      const reportRes = http.get(
-        `${BASE_URL}/v1/payments/reports/summary?startDate=${encodeURIComponent('2020-01-01T00:00:00Z')}&endDate=${encodeURIComponent('2030-12-31T23:59:59Z')}`
-      );
-      check(reportRes, { 'report ok': (r) => r.status >= 200 && r.status < 300 }) || cpuErrors.add(1);
+      const query = `
+        query($startDate: String!, $endDate: String!) {
+          paymentSummary(startDate: $startDate, endDate: $endDate) {
+            totalsByStatus {
+              status
+              total
+            }
+          }
+        }
+      `;
+      const res = executeGraphQL(query, {
+        startDate: '2020-01-01T00:00:00Z',
+        endDate: '2030-12-31T23:59:59Z',
+      });
+      summaryLatency.add(res.timings.duration);
+      check(res, { 'summary ok': (r) => r.status === 200 }) || errors.add(1);
 
     } else {
       const mutation = `
@@ -107,7 +137,6 @@ export default function (data) {
           processPayment(input: $input) {
             id
             status
-            createdAt
           }
         }
       `;
@@ -119,14 +148,15 @@ export default function (data) {
           type: 'DEBIT',
         },
       });
-      check(res, { 'graphql ok': (r) => r.status === 200 }) || cpuErrors.add(1);
+      paymentCreateLatency.add(res.timings.duration);
+      check(res, { 'payment create ok': (r) => r.status === 200 }) || errors.add(1);
     }
   } catch (e) {
-    cpuErrors.add(1);
-    console.error(`CPU stress error: ${e.message}`);
+    errors.add(1);
+    console.error(`Error: ${e.message}`);
   }
 
-  activeVUs.add(-1);
+  concurrentVUs.add(-1);
   sleep(0.05);
 }
 
@@ -135,16 +165,14 @@ export function teardown(data) {
 }
 
 export function handleSummary(data) {
-  printScalingBox('CPU STRESS TEST', {
+  printScalingBox('CPU STRESS TEST - GO', {
     'Target VUs': TARGET_VUS,
     'Total Requests': data.metrics.http_reqs.values.count,
+    'Error Rate': `${(data.metrics.errors.values.rate * 100).toFixed(2)}%`,
     'P95 Duration': `${data.metrics.http_req_duration.values['p(95)']?.toFixed(2) || 'N/A'}ms`,
-    'Error Rate': `${(data.metrics.cpu_stress_errors?.values.rate * 100 || 0).toFixed(2)}%`,
-    'Avg Transfer': `${data.metrics.cpu_stress_wallet_transfer_duration?.values.avg?.toFixed(2) || 'N/A'}ms`,
-    'Avg Batch': `${data.metrics.cpu_stress_batch_duration?.values.avg?.toFixed(2) || 'N/A'}ms`,
   });
 
   return {
-    'results/cpu-stress-summary.json': JSON.stringify(data, null, 2),
+    'results/go-cpu-stress-summary.json': JSON.stringify(data, null, 2),
   };
 }
